@@ -137,11 +137,14 @@ class OvsPlugin(plugin.PluginBase):
             constants.OVS_VHOSTUSER_PREFIX, vif.id)
         args = {}
         if vif.mode == "client":
+            #如果vif的模式是client端，则使用'dpdkvhostuser'
             args['interface_type'] = \
                 constants.OVS_VHOSTUSER_INTERFACE_TYPE
         else:
+            #否则dpdkvhostuserclient
             args['interface_type'] = \
                 constants.OVS_VHOSTUSER_CLIENT_INTERFACE_TYPE
+            #记录vhost server path
             args['vhost_server_path'] = vif.path
 
         self._create_vif_port(

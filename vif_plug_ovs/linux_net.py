@@ -49,6 +49,7 @@ PF_FUNC_RE = re.compile("\.(\d+)", 0)
 _SRIOV_TOTALVFS = "sriov_totalvfs"
 
 
+#通过ovs-vsctl创建接口
 def _ovs_vsctl(args, timeout=None):
     full_args = ['ovs-vsctl']
     if timeout is not None:
@@ -62,6 +63,7 @@ def _ovs_vsctl(args, timeout=None):
         raise exception.AgentError(method=full_args)
 
 
+#创建port
 def _create_ovs_vif_cmd(bridge, dev, iface_id, mac,
                         instance_id, interface_type=None,
                         vhost_server_path=None):
@@ -83,6 +85,7 @@ def _create_ovs_bridge_cmd(bridge, datapath_type):
             '--', 'set', 'Bridge', bridge, 'datapath_type=%s' % datapath_type]
 
 
+#创建ovs port
 @privsep.vif_plug.entrypoint
 def create_ovs_vif_port(bridge, dev, iface_id, mac, instance_id,
                         mtu=None, interface_type=None, timeout=None,
