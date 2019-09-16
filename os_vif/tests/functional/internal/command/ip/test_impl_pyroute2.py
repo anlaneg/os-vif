@@ -10,12 +10,13 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import os
 import re
 
 from oslo_concurrency import processutils
 from oslo_utils import excutils
 
-from os_vif.internal.command.ip import impl_pyroute2
+from os_vif.internal.ip.api import ip as ip_lib
 from os_vif.tests.functional import base
 from os_vif.tests.functional import privsep
 
@@ -96,17 +97,22 @@ class ShellIpCommands(object):
 
 @privsep.os_vif_pctxt.entrypoint
 def _ip_cmd_set(*args, **kwargs):
-    impl_pyroute2.PyRoute2().set(*args, **kwargs)
+    ip_lib.set(*args, **kwargs)
 
 
 @privsep.os_vif_pctxt.entrypoint
 def _ip_cmd_add(*args, **kwargs):
-    impl_pyroute2.PyRoute2().add(*args, **kwargs)
+    ip_lib.add(*args, **kwargs)
 
 
 @privsep.os_vif_pctxt.entrypoint
 def _ip_cmd_delete(*args, **kwargs):
-    impl_pyroute2.PyRoute2().delete(*args, **kwargs)
+    ip_lib.delete(*args, **kwargs)
+
+
+@privsep.os_vif_pctxt.entrypoint
+def _ip_cmd_exists(*args, **kwargs):
+    return ip_lib.exists(*args, **kwargs)
 
 
 class TestIpCommand(ShellIpCommands, base.BaseFunctionalTestCase):
@@ -181,3 +187,72 @@ class TestIpCommand(ShellIpCommands, base.BaseFunctionalTestCase):
         self.assertTrue(self.exist_device(device))
         _ip_cmd_delete(device)
         self.assertFalse(self.exist_device(device))
+
+    def test_iproute_object_closes_correctly(self):
+        # NOTE(ralonsoh): check https://bugs.launchpad.net/os-vif/+bug/1807949
+        device = "test_dev_9"
+        link = "test_devlink_2"
+        self.add_device(link, 'dummy')
+        self.addCleanup(self.del_device, device)
+        self.addCleanup(self.del_device, link)
+        for _ in range(300):
+            _ip_cmd_add(device, 'vlan', link=link, vlan_id=100)
+            _ip_cmd_delete(device)
+
+    def test_exists(self):
+        device = "test_dev_10"
+        self.addCleanup(self.del_device, device)
+        self.add_device(device, 'dummy')
+        self.assertTrue(_ip_cmd_exists(device))
+        self.del_device(device)
+        self.assertFalse(_ip_cmd_exists(device))
+
+    def test_add_bridge(self):
+        device = "test_dev_11"
+        self.addCleanup(self.del_device, device)
+        _ip_cmd_add(device, 'bridge')
+        self.assertTrue(self.exist_device(device))
+        base_path = "/sys/class/net/test_dev_11/bridge/%s"
+        with open(base_path % "forward_delay", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "stp_state", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "multicast_snooping", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "ageing_time", "r") as f:
+            value = int(f.readline().rstrip('\n'))
+            # NOTE(sean-k-mooney): IEEE 8021-Q recommends that the default
+            # ageing should be 300 and the linux kernel defaults to 300
+            # via an unconditional define. As such we expect this to be
+            # 300 however since services like network-manager could change
+            # the default on bridge creation we check that if it is not 300
+            # then the value should not be 0.
+            self.assertTrue(300 == value or value != 0)
+
+    def test_add_bridge_with_mac_ageing_0(self):
+        device = "test_dev_12"
+        self.addCleanup(self.del_device, device)
+        _ip_cmd_add(device, 'bridge', ageing=0)
+        self.assertTrue(self.exist_device(device))
+        base_path = "/sys/class/net/test_dev_12/bridge/%s"
+        with open(base_path % "forward_delay", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "stp_state", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "ageing_time", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+        with open(base_path % "multicast_snooping", "r") as f:
+            self.assertEqual("0", f.readline().rstrip('\n'))
+
+    def test_add_port_to_bridge(self):
+        device = "test_dev_13"
+        bridge = "test_dev_14"
+        self.addCleanup(self.del_device, device)
+        self.addCleanup(self.del_device, bridge)
+        self.add_device(device, 'dummy')
+        _ip_cmd_add(bridge, 'bridge')
+        self.assertTrue(self.exist_device(device))
+        self.assertTrue(self.exist_device(bridge))
+        _ip_cmd_set(device, master=bridge)
+        path = "/sys/class/net/{}/brif/{}".format(bridge, device)
+        self.assertTrue(os.path.exists(path))

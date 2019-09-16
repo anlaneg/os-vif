@@ -14,6 +14,13 @@ Glossary
 
      __ http://docs.projectcalico.org
 
+   Fast Path
+
+     When used, 6Wind's proprietary fast path technology behaves as a
+     transparent acceleration layer for traditional switches (:term:`Open
+     vSwitch`, :term:`Linux Bridge`) and for alternative networking mechanisms
+     (:term:`Calico`, Midonet).
+
    Linux Bridge
 
      The native networking "backend" found in Linux.
@@ -85,15 +92,21 @@ Glossary
 
    vhost
 
-     An alternative to :term:`virtio` that allows a userspace process to share
-     *virtqueues* directly with the kernel, preventing the QEMU process from
-     becoming a bottleneck.
+     An alternative to :term:`virtio` that allows userspace guest processes to
+     share *virtqueues* directly with the kernel (or, more specifically, a
+     kernel module) preventing the QEMU process from becoming a bottleneck.
 
    vhost-user
 
      A variation of :term:`vhost` that operates entirely in userspace. This
-     allows processes operating in userspace, such as virtual switches, to
-     avoid the kernel entirely and maximize performance.
+     allows userspace guest processes to share *virtqueues* with other processes
+     operating in userspace, such as virtual switches, avoiding the kernel
+     entirely and maximize performance.
+
+     When used, a guest exposes a UNIX socket for its control plane, allowing
+     the external userspace service to provide the backend data plane via a
+     mapped memory region. This process must implement the corresponding virtio
+     vhost protocol, such as :term:`virtio-net` for networking, on this socket.
 
      Refer to the `QEMU documentation`__ for more information.
 

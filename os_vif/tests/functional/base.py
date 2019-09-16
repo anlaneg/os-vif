@@ -18,7 +18,6 @@ import functools
 import inspect
 import os
 import six
-import string
 import sys
 
 import eventlet.timeout
@@ -41,14 +40,24 @@ def _get_test_log_path():
 DEFAULT_LOG_DIR = os.path.join(_get_test_log_path(), 'osvif-functional-logs')
 
 
-def _catch_timeout(f):
-    @functools.wraps(f)
-    def func(self, *args, **kwargs):
-        try:
-            return f(self, *args, **kwargs)
-        except eventlet.Timeout as e:
-            self.fail('Execution of this test timed out: %s' % e)
-    return func
+def wait_until_true(predicate, timeout=15, sleep=1):
+    """Wait until callable predicate is evaluated as True
+
+    :param predicate: Callable deciding whether waiting should continue.
+                      Best practice is to instantiate predicate with
+                      ``functools.partial()``.
+    :param timeout: Timeout in seconds how long should function wait.
+    :param sleep: Polling interval for results in seconds.
+    :return: True if the predicate is evaluated as True within the timeout,
+             False in case of timeout evaluating the predicate.
+    """
+    try:
+        with eventlet.Timeout(timeout):
+            while not predicate():
+                eventlet.sleep(sleep)
+    except eventlet.Timeout:
+        return False
+    return True
 
 
 class _CatchTimeoutMetaclass(abc.ABCMeta):
@@ -59,13 +68,22 @@ class _CatchTimeoutMetaclass(abc.ABCMeta):
                 # both unbound methods (python2) and functions (python3)
                 cls, predicate=inspect.isroutine):
             if name.startswith('test_'):
-                setattr(cls, name, _catch_timeout(method))
+                setattr(cls, name, cls._catch_timeout(method))
+
+    @staticmethod
+    def _catch_timeout(f):
+        @functools.wraps(f)
+        def func(self, *args, **kwargs):
+            try:
+                return f(self, *args, **kwargs)
+            except eventlet.Timeout as e:
+                self.fail('Execution of this test timed out: %s' % e)
+        return func
 
 
-def setup_logging():
+def setup_logging(component_name):
     """Sets up the logging options for a log with supplied name."""
-    product_name = "os_vif"
-    logging.setup(cfg.CONF, product_name)
+    logging.setup(cfg.CONF, component_name)
     LOG.info("Logging enabled!")
     LOG.info("%(prog)s version %(version)s",
              {'prog': sys.argv[0], 'version': osvif_version.__version__})
@@ -74,8 +92,7 @@ def setup_logging():
 
 def sanitize_log_path(path):
     """Sanitize the string so that its log path is shell friendly"""
-    replace_map = string.maketrans(' ()', '-__')
-    return path.translate(replace_map)
+    return path.replace(' ', '-').replace('(', '_').replace(')', '_')
 
 
 # Test worker cannot survive eventlet's Timeout exception, which effectively
@@ -86,21 +103,25 @@ def sanitize_log_path(path):
 class BaseFunctionalTestCase(base.BaseTestCase):
     """Base class for functional tests."""
 
+    COMPONENT_NAME = 'os_vif'
+    PRIVILEGED_GROUP = 'os_vif_privileged'
+
     def setUp(self):
         super(BaseFunctionalTestCase, self).setUp()
         logging.register_options(CONF)
-        setup_logging()
+        setup_logging(self.COMPONENT_NAME)
         fileutils.ensure_tree(DEFAULT_LOG_DIR, mode=0o755)
         log_file = sanitize_log_path(
             os.path.join(DEFAULT_LOG_DIR, "%s.txt" % self.id()))
-        self.config(log_file=log_file)
+        self.flags(log_file=log_file)
         privsep_helper = os.path.join(
-            os.getenv('VIRTUAL_ENV'), 'bin', 'privsep-helper')
-        self.config(
+            os.getenv('VIRTUAL_ENV', os.path.dirname(sys.executable)[:-4]),
+            'bin', 'privsep-helper')
+        self.flags(
             helper_command=' '.join(['sudo', '-E', privsep_helper]),
-            group='os_vif_privileged')
+            group=self.PRIVILEGED_GROUP)
 
-    def config(self, **kw):
+    def flags(self, **kw):
         """Override some configuration values.
 
         The keyword arguments are the names of configuration options to

@@ -24,7 +24,7 @@ import os
 import re
 import sys
 
-from os_vif.internal.command import ip as ip_lib
+from os_vif.internal.ip.api import ip as ip_lib
 from oslo_concurrency import processutils
 from oslo_log import log as logging
 from oslo_utils import excutils
@@ -35,94 +35,35 @@ from vif_plug_ovs import privsep
 
 LOG = logging.getLogger(__name__)
 
-VIRTFN_RE = re.compile("virtfn(\d+)")
+VIRTFN_RE = re.compile(r"virtfn(\d+)")
 
 # phys_port_name only contains the VF number
-INT_RE = re.compile("^(\d+)$")
+INT_RE = re.compile(r"^(\d+)$")
 # phys_port_name contains VF## or vf##
-VF_RE = re.compile("vf(\d+)", re.IGNORECASE)
+VF_RE = re.compile(r"vf(\d+)", re.IGNORECASE)
 # phys_port_name contains PF## or pf##
-PF_RE = re.compile("pf(\d+)", re.IGNORECASE)
+PF_RE = re.compile(r"pf(\d+)", re.IGNORECASE)
 # bus_info (bdf) contains <bus>:<dev>.<func>
-PF_FUNC_RE = re.compile("\.(\d+)", 0)
+PF_FUNC_RE = re.compile(r"\.(\d+)", 0)
 
 _SRIOV_TOTALVFS = "sriov_totalvfs"
+NIC_NAME_LEN = 14
 
 
-#通过ovs-vsctl创建接口
-def _ovs_vsctl(args, timeout=None):
-    full_args = ['ovs-vsctl']
-    if timeout is not None:
-        full_args += ['--timeout=%s' % timeout]
-    full_args += args
-    try:
-        return processutils.execute(*full_args)
-    except Exception as e:
-        LOG.error("Unable to execute %(cmd)s. Exception: %(exception)s",
-                  {'cmd': full_args, 'exception': e})
-        raise exception.AgentError(method=full_args)
-
-
-#创建port
-def _create_ovs_vif_cmd(bridge, dev, iface_id, mac,
-                        instance_id, interface_type=None,
-                        vhost_server_path=None):
-    cmd = ['--', '--may-exist', 'add-port', bridge, dev,
-            '--', 'set', 'Interface', dev,
-            'external-ids:iface-id=%s' % iface_id,
-            'external-ids:iface-status=active',
-            'external-ids:attached-mac=%s' % mac,
-            'external-ids:vm-uuid=%s' % instance_id]
-    if interface_type:
-        cmd += ['type=%s' % interface_type]
-    if vhost_server_path:
-        cmd += ['options:vhost-server-path=%s' % vhost_server_path]
-    return cmd
-
-
-def _create_ovs_bridge_cmd(bridge, datapath_type):
-    return ['--', '--may-exist', 'add-br', bridge,
-            '--', 'set', 'Bridge', bridge, 'datapath_type=%s' % datapath_type]
-
-
-#创建ovs port
-@privsep.vif_plug.entrypoint
-def create_ovs_vif_port(bridge, dev, iface_id, mac, instance_id,
-                        mtu=None, interface_type=None, timeout=None,
-                        vhost_server_path=None):
-    _ovs_vsctl(_create_ovs_vif_cmd(bridge, dev, iface_id,
-                                   mac, instance_id, interface_type,
-                                   vhost_server_path), timeout=timeout)
-    _update_device_mtu(dev, mtu, interface_type, timeout=timeout)
-
+def _update_device_mtu(dev, mtu):
+    if not mtu:
+        return
+    if sys.platform != constants.PLATFORM_WIN32:
+        # Hyper-V with OVS does not support external programming of
+        # virtual interface MTUs via netsh or other Windows tools.
+        # When plugging an interface on Windows, we therefore skip
+        # programming the MTU and fallback to DHCP advertisement.
+        set_device_mtu(dev, mtu)
 
 @privsep.vif_plug.entrypoint
-def update_ovs_vif_port(dev, mtu=None, interface_type=None, timeout=None):
-    _update_device_mtu(dev, mtu, interface_type, timeout=timeout)
-
-
-@privsep.vif_plug.entrypoint
-def delete_ovs_vif_port(bridge, dev, timeout=None, delete_netdev=True):
-    _ovs_vsctl(['--', '--if-exists', 'del-port', bridge, dev],
-               timeout=timeout)
-    if delete_netdev:
-        _delete_net_dev(dev)
-
-
-def device_exists(device):
-    """Check if ethernet device exists."""
-    return os.path.exists('/sys/class/net/%s' % device)
-
-
-def interface_in_bridge(bridge, device):
-    """Check if an ethernet device belongs to a Linux Bridge."""
-    return os.path.exists('/sys/class/net/%(bridge)s/brif/%(device)s' %
-                          {'bridge': bridge, 'device': device})
-
-
-def _delete_net_dev(dev):
+def delete_net_dev(dev):
     """Delete a network device only if it exists."""
-    if device_exists(dev):
+    if ip_lib.exists(dev):
         try:
             ip_lib.delete(dev, check_exit_code=[0, 2, 254])
             LOG.debug("Net device removed: '%s'", dev)
@@ -137,7 +78,7 @@ def create_veth_pair(dev1_name, dev2_name, mtu):
     deleting any previous devices with those names.
     """
     for dev in [dev1_name, dev2_name]:
-        _delete_net_dev(dev)
+        delete_net_dev(dev)
 
     ip_lib.add(dev1_name, 'veth', peer=dev2_name)
     for dev in [dev1_name, dev2_name]:
@@ -153,95 +94,77 @@ def update_veth_pair(dev1_name, dev2_name, mtu):
         _update_device_mtu(dev, mtu)
 
 
-@privsep.vif_plug.entrypoint
-def ensure_ovs_bridge(bridge, datapath_type):
-    _ovs_vsctl(_create_ovs_bridge_cmd(bridge, datapath_type))
+def _disable_ipv6(bridge):
+    """Disable ipv6 if available for bridge. Must be called from
+       privsep context.
+    """
+    # NOTE(sean-k-mooney): os-vif disables ipv6 to ensure the Bridge
+    # does not aquire an ipv6 auto config or link local adress.
+    # This is required to prevent bug 1302080.
+    # https://bugs.launchpad.net/neutron/+bug/1302080
+    disv6 = ('/proc/sys/net/ipv6/conf/%s/disable_ipv6' %
+             bridge)
+    if os.path.exists(disv6):
+        with open(disv6, 'w') as f:
+            f.write('1')
+
+
+# TODO(ralonsoh): extract into common module
+def _arp_filtering(bridge):
+    """Prevent the bridge from replying to ARP messages with machine local IPs
+
+    1. Reply only if the target IP address is local address configured on the
+       incoming interface.
+    2. Always use the best local address.
+    """
+    arp_params = [('/proc/sys/net/ipv4/conf/%s/arp_ignore' % bridge, '1'),
+                  ('/proc/sys/net/ipv4/conf/%s/arp_announce' % bridge, '2')]
+    for parameter, value in arp_params:
+        if os.path.exists(parameter):
+            with open(parameter, 'w') as f:
+                f.write(value)
 
 
 @privsep.vif_plug.entrypoint
 def ensure_bridge(bridge):
-    if not device_exists(bridge):
-        processutils.execute('brctl', 'addbr', bridge)
-        processutils.execute('brctl', 'setfd', bridge, 0)
-        processutils.execute('brctl', 'stp', bridge, 'off')
-        processutils.execute('brctl', 'setageing', bridge, 0)
-        syspath = '/sys/class/net/%s/bridge/multicast_snooping'
-        syspath = syspath % bridge
-        processutils.execute('tee', syspath, process_input='0',
-                             check_exit_code=[0, 1])
-        disv6 = ('/proc/sys/net/ipv6/conf/%s/disable_ipv6' %
-                 bridge)
-        if os.path.exists(disv6):
-            processutils.execute('tee',
-                                 disv6,
-                                 process_input='1',
-                                 check_exit_code=[0, 1])
+    if not ip_lib.exists(bridge):
+        # NOTE(sean-k-mooney): we set mac ageing to 0 to disable mac ageing
+        # on the hybrid plug bridge to avoid packet loss during live
+        # migration. This avoids bug #1715317 and related bug #1414559
+        ip_lib.add(bridge, 'bridge', ageing=0)
+    _disable_ipv6(bridge)
+    _arp_filtering(bridge)
     # we bring up the bridge to allow it to switch packets
     set_interface_state(bridge, 'up')
 
 
 @privsep.vif_plug.entrypoint
 def delete_bridge(bridge, dev):
-    if device_exists(bridge):
-        if interface_in_bridge(bridge, dev):
-            processutils.execute('brctl', 'delif', bridge, dev)
-
-        ip_lib.set(bridge, state='down')
-        processutils.execute('brctl', 'delbr', bridge)
+    if ip_lib.exists(bridge):
+        # Note(sean-k-mooney): this will detach all ports on
+        # the bridge before deleting the bridge.
+        ip_lib.delete(bridge, check_exit_code=[0, 2, 254])
+        # howver it will not set the detached interface down
+        # so we set the dev down if dev is not None and exists.
+        if dev and ip_lib.exists(dev):
+            set_interface_state(dev, "down")
 
 
 @privsep.vif_plug.entrypoint
 def add_bridge_port(bridge, dev):
-    processutils.execute('brctl', 'addif', bridge, dev)
-
-
-def _update_device_mtu(dev, mtu, interface_type=None, timeout=120):
-    if not mtu:
-        return
-    if interface_type not in [
-        constants.OVS_VHOSTUSER_INTERFACE_TYPE,
-        constants.OVS_VHOSTUSER_CLIENT_INTERFACE_TYPE]:
-        if sys.platform != constants.PLATFORM_WIN32:
-            # Hyper-V with OVS does not support external programming of virtual
-            # interface MTUs via netsh or other Windows tools.
-            # When plugging an interface on Windows, we therefore skip
-            # programming the MTU and fallback to DHCP advertisement.
-            _set_device_mtu(dev, mtu)
-    elif _ovs_supports_mtu_requests(timeout=timeout):
-        _set_mtu_request(dev, mtu, timeout=timeout)
-    else:
-        LOG.debug("MTU not set on %(interface_name)s interface "
-                  "of type %(interface_type)s.",
-                  {'interface_name': dev,
-                   'interface_type': interface_type})
+    ip_lib.set(dev, master=bridge)
 
 
 @privsep.vif_plug.entrypoint
-def _set_device_mtu(dev, mtu):
+def set_device_mtu(dev, mtu):
     """Set the device MTU."""
-    ip_lib.set(dev, mtu=mtu, check_exit_code=[0, 2, 254])
+    if ip_lib.exists(dev):
+        ip_lib.set(dev, mtu=mtu, check_exit_code=[0, 2, 254])
 
 
 @privsep.vif_plug.entrypoint
 def set_interface_state(interface_name, port_state):
     ip_lib.set(interface_name, state=port_state, check_exit_code=[0, 2, 254])
-
-
-@privsep.vif_plug.entrypoint
-def _set_mtu_request(dev, mtu, timeout=None):
-    args = ['--', 'set', 'interface', dev,
-            'mtu_request=%s' % mtu]
-    _ovs_vsctl(args, timeout=timeout)
-
-
-@privsep.vif_plug.entrypoint
-def _ovs_supports_mtu_requests(timeout=None):
-    args = ['--columns=mtu_request', 'list', 'interface']
-    _, error = _ovs_vsctl(args, timeout=timeout)
-    if (error == 'ovs-vsctl: Interface does not contain' +
-              ' a column whose name matches "mtu_request"'):
-            return False
-    return True
 
 
 def _parse_vf_number(phys_port_name):
@@ -450,3 +373,18 @@ def get_vf_num_by_pci_address(pci_addr):
     if vf_num is None:
         raise exception.PciDeviceNotFoundById(id=pci_addr)
     return vf_num
+
+
+def get_dpdk_representor_port_name(port_id):
+    devname = "vfr" + port_id
+    return devname[:NIC_NAME_LEN]
+
+
+def get_pf_pci_from_vf(vf_pci):
+    """Get physical function PCI address of a VF
+
+    :param vf_pci: the PCI address of the VF
+    :return: the PCI address of the PF
+    """
+    physfn_path = os.readlink("/sys/bus/pci/devices/%s/physfn" % vf_pci)
+    return os.path.basename(physfn_path)

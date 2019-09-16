@@ -16,6 +16,7 @@
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
 extensions = [
+    'sphinx.ext.todo',
     'sphinx.ext.autodoc',
     'openstackdocstheme',
     'reno.sphinxext',
@@ -25,7 +26,6 @@ extensions = [
 repository_name = 'openstack/os-vif'
 bug_project = 'os-vif'
 bug_tag = ''
-html_last_updated_fmt = '%Y-%m-%d %H:%M'
 
 # The suffix of source filenames.
 source_suffix = '.rst'
@@ -34,7 +34,6 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'os-vif'
 copyright = u'2016, OpenStack Foundation'
 
 # If true, '()' will be appended to :func: etc. cross-reference text.

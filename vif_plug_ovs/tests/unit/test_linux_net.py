@@ -15,10 +15,9 @@ import mock
 import os.path
 import testtools
 
-from os_vif.internal.command import ip as ip_lib
-from oslo_concurrency import processutils
+from os_vif.internal.ip.api import ip as ip_lib
+from six.moves import builtins
 
-from vif_plug_ovs import constants
 from vif_plug_ovs import exception
 from vif_plug_ovs import linux_net
 from vif_plug_ovs import privsep
@@ -31,312 +30,107 @@ class LinuxNetTest(testtools.TestCase):
 
         privsep.vif_plug.set_client_mode(False)
 
-    @mock.patch.object(ip_lib, "set")
-    @mock.patch.object(linux_net, "device_exists", return_value=True)
-    def test_ensure_bridge_exists(self, mock_dev_exists, mock_ip_set):
+    @mock.patch.object(linux_net, "_arp_filtering")
+    @mock.patch.object(linux_net, "set_interface_state")
+    @mock.patch.object(linux_net, "_disable_ipv6")
+    @mock.patch.object(ip_lib, "add")
+    @mock.patch.object(ip_lib, "exists", return_value=False)
+    def test_ensure_bridge(self, mock_dev_exists, mock_add,
+                           mock_disable_ipv6, mock_set_state,
+                           mock_arp_filtering):
         linux_net.ensure_bridge("br0")
 
-        mock_ip_set.assert_called_once_with('br0', state='up',
-                                            check_exit_code=[0, 2, 254])
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
+        mock_dev_exists.assert_called_once_with("br0")
+        mock_add.assert_called_once_with("br0", "bridge", ageing=0)
+        mock_disable_ipv6.assert_called_once_with("br0")
+        mock_set_state.assert_called_once_with("br0", "up")
+        mock_arp_filtering.assert_called_once_with("br0")
 
-    @mock.patch.object(ip_lib, "set")
-    @mock.patch.object(os.path, "exists", return_value=False)
-    @mock.patch.object(processutils, "execute")
-    @mock.patch.object(linux_net, "device_exists", return_value=False)
-    def test_ensure_bridge_new_ipv4(self, mock_dev_exists, mock_execute,
-                                    mock_path_exists, mock_ip_set):
+    @mock.patch.object(linux_net, "_arp_filtering")
+    @mock.patch.object(linux_net, "set_interface_state")
+    @mock.patch.object(linux_net, "_disable_ipv6")
+    @mock.patch.object(ip_lib, "add")
+    @mock.patch.object(ip_lib, "exists", return_value=True)
+    def test_ensure_bridge_exists(self, mock_dev_exists, mock_add,
+                                  mock_disable_ipv6, mock_set_state,
+                                  mock_arp_filtering):
         linux_net.ensure_bridge("br0")
 
-        calls = [
-            mock.call('brctl', 'addbr', 'br0'),
-            mock.call('brctl', 'setfd', 'br0', 0),
-            mock.call('brctl', 'stp', 'br0', "off"),
-            mock.call('brctl', 'setageing', 'br0', 0),
-            mock.call('tee', '/sys/class/net/br0/bridge/multicast_snooping',
-                      check_exit_code=[0, 1], process_input='0'),
-        ]
-        mock_execute.assert_has_calls(calls)
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
-        mock_ip_set.assert_called_once_with('br0', state='up',
-                                            check_exit_code=[0, 2, 254])
+        mock_dev_exists.assert_called_once_with("br0")
+        mock_add.assert_not_called()
+        mock_disable_ipv6.assert_called_once_with("br0")
+        mock_set_state.assert_called_once_with("br0", "up")
+        mock_arp_filtering.assert_called_once_with("br0")
 
-    @mock.patch.object(ip_lib, "set")
-    @mock.patch.object(os.path, "exists", return_value=True)
-    @mock.patch.object(processutils, "execute")
-    @mock.patch.object(linux_net, "device_exists", return_value=False)
-    def test_ensure_bridge_new_ipv6(self, mock_dev_exists, mock_execute,
-                                    mock_path_exists, mock_ip_set):
-        linux_net.ensure_bridge("br0")
+    @mock.patch('six.moves.builtins.open')
+    @mock.patch("os.path.exists")
+    def test__disable_ipv6(self, mock_exists, mock_open):
 
-        calls = [
-            mock.call('brctl', 'addbr', 'br0'),
-            mock.call('brctl', 'setfd', 'br0', 0),
-            mock.call('brctl', 'stp', 'br0', "off"),
-            mock.call('brctl', 'setageing', 'br0', 0),
-            mock.call('tee', '/sys/class/net/br0/bridge/multicast_snooping',
-                      check_exit_code=[0, 1], process_input='0'),
-            mock.call('tee', '/proc/sys/net/ipv6/conf/br0/disable_ipv6',
-                      check_exit_code=[0, 1], process_input='1'),
-        ]
-        mock_execute.assert_has_calls(calls)
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
-        mock_ip_set.assert_called_once_with('br0', state='up',
-                                            check_exit_code=[0, 2, 254])
+        exists_path = "/proc/sys/net/ipv6/conf/br0/disable_ipv6"
+        mock_exists.return_value = False
 
-    @mock.patch.object(processutils, "execute")
-    @mock.patch.object(linux_net, "device_exists", return_value=False)
-    @mock.patch.object(linux_net, "interface_in_bridge", return_value=False)
-    def test_delete_bridge_none(self, mock_interface_br, mock_dev_exists,
-                                mock_execute,):
+        linux_net._disable_ipv6("br0")
+        mock_exists.assert_called_once_with(exists_path)
+        mock_open.assert_not_called()
+
+        mock_exists.reset_mock()
+        mock_exists.return_value = True
+        linux_net._disable_ipv6("br0")
+        mock_exists.assert_called_once_with(exists_path)
+        mock_open.assert_called_once_with(exists_path, 'w')
+
+    @mock.patch.object(os.path, 'exists', return_value=True)
+    @mock.patch.object(builtins, 'open')
+    def test__arp_filtering(self, mock_open, *args):
+        mock_open.side_effect = mock.mock_open()
+        linux_net._arp_filtering("br0")
+
+        mock_open.assert_has_calls([
+            mock.call('/proc/sys/net/ipv4/conf/br0/arp_ignore', 'w'),
+            mock.call('/proc/sys/net/ipv4/conf/br0/arp_announce', 'w')])
+        mock_open.side_effect.return_value.write.assert_has_calls([
+            mock.call('1'),
+            mock.call('2')])
+
+    @mock.patch.object(ip_lib, "delete")
+    @mock.patch.object(ip_lib, "exists", return_value=False)
+    def test_delete_bridge_none(self, mock_dev_exists, mock_delete):
         linux_net.delete_bridge("br0", "vnet1")
 
-        mock_execute.assert_not_called()
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
-        mock_interface_br.assert_not_called()
+        mock_delete.assert_not_called()
+        mock_dev_exists.assert_called_once_with("br0")
 
-    @mock.patch.object(ip_lib, "set")
-    @mock.patch.object(processutils, "execute")
-    @mock.patch.object(linux_net, "device_exists", return_value=True)
-    @mock.patch.object(linux_net, "interface_in_bridge", return_value=True)
-    def test_delete_bridge_exists(self, mock_interface_br, mock_dev_exists,
-                                  mock_execute, mock_ip_set):
+    @mock.patch.object(linux_net, "set_interface_state")
+    @mock.patch.object(ip_lib, "delete")
+    @mock.patch.object(ip_lib, "exists", return_value=True)
+    def test_delete_bridge_exists(self, mock_dev_exists, mock_delete,
+                                  mock_set_state):
         linux_net.delete_bridge("br0", "vnet1")
 
-        calls = [
-            mock.call('brctl', 'delif', 'br0', 'vnet1'),
-            mock.call('brctl', 'delbr', 'br0')]
-        mock_execute.assert_has_calls(calls)
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
-        mock_interface_br.assert_called_once_with("br0", "vnet1")
-        mock_ip_set.assert_called_once_with('br0', state='down')
+        mock_dev_exists.assert_has_calls([mock.call("br0"),
+                                          mock.call("vnet1")])
+        mock_delete.assert_called_once_with("br0", check_exit_code=[0, 2, 254])
+        mock_set_state.assert_called_once_with("vnet1", "down")
 
-    @mock.patch.object(ip_lib, "set")
-    @mock.patch.object(processutils, "execute")
-    @mock.patch.object(linux_net, "device_exists", return_value=True)
-    @mock.patch.object(linux_net, "interface_in_bridge", return_value=False)
-    def test_delete_interface_not_present(self,
-            mock_interface_br, mock_dev_exists, mock_execute, mock_ip_set):
+    @mock.patch.object(linux_net, "set_interface_state")
+    @mock.patch.object(ip_lib, "delete")
+    @mock.patch.object(ip_lib, "exists")
+    def test_delete_interface_not_present(self, mock_dev_exists, mock_delete,
+                                          mock_set_state):
+        mock_dev_exists.return_value = next(lambda: (yield True),
+                                            (yield False))
+
         linux_net.delete_bridge("br0", "vnet1")
 
-        mock_execute.assert_called_once_with('brctl', 'delbr', 'br0')
-        mock_dev_exists.assert_has_calls([mock.call("br0")])
-        mock_interface_br.assert_called_once_with("br0", "vnet1")
-        mock_ip_set.assert_called_once_with('br0', state='down')
+        mock_dev_exists.assert_has_calls([mock.call("br0"),
+                                          mock.call("vnet1")])
+        mock_delete.assert_called_once_with("br0", check_exit_code=[0, 2, 254])
+        mock_set_state.assert_not_called()
 
-    @mock.patch.object(processutils, "execute")
-    def test_add_bridge_port(self, mock_execute):
+    @mock.patch.object(ip_lib, "set")
+    def test_add_bridge_port(self, mock_set):
         linux_net.add_bridge_port("br0", "vnet1")
-
-        mock_execute.assert_has_calls([
-            mock.call('brctl', 'addif', 'br0', 'vnet1')])
-
-    def test_ovs_vif_port_cmd(self):
-        expected = ['--', '--may-exist', 'add-port',
-                    'fake-bridge', 'fake-dev',
-                    '--', 'set', 'Interface', 'fake-dev',
-                    'external-ids:iface-id=fake-iface-id',
-                    'external-ids:iface-status=active',
-                    'external-ids:attached-mac=fake-mac',
-                    'external-ids:vm-uuid=fake-instance-uuid']
-        cmd = linux_net._create_ovs_vif_cmd('fake-bridge', 'fake-dev',
-                                            'fake-iface-id', 'fake-mac',
-                                            'fake-instance-uuid')
-
-        self.assertEqual(expected, cmd)
-
-        expected += ['type=fake-type']
-        cmd = linux_net._create_ovs_vif_cmd('fake-bridge', 'fake-dev',
-                                            'fake-iface-id', 'fake-mac',
-                                            'fake-instance-uuid',
-                                            'fake-type')
-        self.assertEqual(expected, cmd)
-
-        expected += ['options:vhost-server-path=/fake/path']
-        cmd = linux_net._create_ovs_vif_cmd('fake-bridge', 'fake-dev',
-                                            'fake-iface-id', 'fake-mac',
-                                            'fake-instance-uuid',
-                                            'fake-type',
-                                            vhost_server_path='/fake/path')
-        self.assertEqual(expected, cmd)
-
-    @mock.patch.object(linux_net, '_create_ovs_bridge_cmd')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    def test_ensure_ovs_bridge(self, mock_vsctl, mock_create_ovs_bridge):
-        bridge = 'fake-bridge'
-        dp_type = 'fake-type'
-        linux_net.ensure_ovs_bridge(bridge, dp_type)
-        mock_create_ovs_bridge.assert_called_once_with(bridge, dp_type)
-        self.assertTrue(mock_vsctl.called)
-
-    def test_create_ovs_bridge_cmd(self):
-        bridge = 'fake-bridge'
-        dp_type = 'fake-type'
-        expected = ['--', '--may-exist', 'add-br', bridge,
-                    '--', 'set', 'Bridge', bridge,
-                    'datapath_type=%s' % dp_type]
-        actual = linux_net._create_ovs_bridge_cmd(bridge, dp_type)
-        self.assertEqual(expected, actual)
-
-    @mock.patch.object(linux_net, '_ovs_supports_mtu_requests')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    @mock.patch.object(linux_net, '_create_ovs_vif_cmd')
-    @mock.patch.object(linux_net, '_set_device_mtu')
-    def test_ovs_vif_port_with_type_vhostuser(self, mock_set_device_mtu,
-                                              mock_create_cmd, mock_vsctl,
-                                              mock_ovs_supports_mtu_requests):
-        mock_ovs_supports_mtu_requests.return_value = True
-        linux_net.create_ovs_vif_port(
-            'fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid", mtu=1500,
-            interface_type=constants.OVS_VHOSTUSER_INTERFACE_TYPE)
-        mock_create_cmd.assert_called_once_with('fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid", constants.OVS_VHOSTUSER_INTERFACE_TYPE,
-             None)
-        self.assertFalse(mock_set_device_mtu.called)
-        self.assertTrue(mock_vsctl.called)
-
-    @mock.patch.object(linux_net, '_ovs_supports_mtu_requests')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    @mock.patch.object(linux_net, '_create_ovs_vif_cmd')
-    @mock.patch.object(linux_net, '_set_device_mtu')
-    def test_ovs_vif_port_with_type_vhostuserclient(self,
-        mock_set_device_mtu, mock_create_cmd,
-        mock_vsctl, mock_ovs_supports_mtu_requests):
-        mock_ovs_supports_mtu_requests.return_value = True
-        linux_net.create_ovs_vif_port(
-            'fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid", mtu=1500,
-            interface_type=constants.OVS_VHOSTUSER_CLIENT_INTERFACE_TYPE,
-            vhost_server_path="/fake/path")
-        mock_create_cmd.assert_called_once_with('fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid",
-            constants.OVS_VHOSTUSER_CLIENT_INTERFACE_TYPE,
-            "/fake/path")
-        self.assertFalse(mock_set_device_mtu.called)
-        self.assertTrue(mock_vsctl.called)
-
-    @mock.patch.object(linux_net, '_ovs_supports_mtu_requests')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    @mock.patch.object(linux_net, '_create_ovs_vif_cmd')
-    @mock.patch.object(linux_net, '_set_device_mtu')
-    def test_ovs_vif_port_with_no_mtu(self, mock_set_device_mtu,
-                                      mock_create_cmd, mock_vsctl,
-                                      mock_ovs_supports_mtu_requests):
-        mock_ovs_supports_mtu_requests.return_value = True
-        linux_net.create_ovs_vif_port(
-            'fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid")
-        mock_create_cmd.assert_called_once_with('fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid", None, None)
-        self.assertFalse(mock_set_device_mtu.called)
-        self.assertTrue(mock_vsctl.called)
-
-    @mock.patch.object(linux_net, '_ovs_supports_mtu_requests')
-    @mock.patch.object(linux_net, '_set_mtu_request')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    @mock.patch.object(linux_net, '_create_ovs_vif_cmd',
-                       return_value='ovs_command')
-    @mock.patch.object(linux_net, '_set_device_mtu')
-    def test_ovs_vif_port_with_timeout(self, mock_set_device_mtu,
-                                       mock_create_cmd, mock_vsctl,
-                                       mock_set_mtu_request,
-                                       mock_ovs_supports_mtu_requests):
-        mock_ovs_supports_mtu_requests.return_value = True
-
-        linux_net.create_ovs_vif_port(
-            'fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid", timeout=42)
-        self.assertTrue(mock_create_cmd.called)
-        self.assertFalse(mock_set_device_mtu.called)
-        mock_vsctl.assert_called_with('ovs_command', timeout=42)
-
-    @mock.patch.object(linux_net, '_ovs_supports_mtu_requests')
-    @mock.patch.object(linux_net, '_set_mtu_request')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    @mock.patch.object(linux_net, '_create_ovs_vif_cmd',
-                       return_value='ovs_command')
-    @mock.patch.object(linux_net, '_set_device_mtu')
-    def test_ovs_vif_port_with_no_timeout(self, mock_set_device_mtu,
-                                          mock_create_cmd, mock_vsctl,
-                                          mock_set_mtu_request,
-                                          mock_ovs_supports_mtu_requests):
-        mock_ovs_supports_mtu_requests.return_value = True
-        linux_net.create_ovs_vif_port(
-            'fake-bridge',
-            'fake-dev', 'fake-iface-id', 'fake-mac',
-            "fake-instance-uuid")
-        self.assertTrue(mock_create_cmd.called)
-        self.assertFalse(mock_set_device_mtu.called)
-        mock_vsctl.assert_called_with('ovs_command', timeout=None)
-
-    @mock.patch.object(processutils, "execute")
-    def test_ovs_vsctl(self, mock_execute):
-        args = ['fake-args', 42]
-        timeout = 42
-        linux_net._ovs_vsctl(args)
-        linux_net._ovs_vsctl(args, timeout=timeout)
-        mock_execute.assert_has_calls([
-            mock.call('ovs-vsctl', *args),
-            mock.call('ovs-vsctl', '--timeout=%s' % timeout, *args)])
-
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    def test_set_mtu_request(self, mock_vsctl):
-        dev = 'fake-dev'
-        mtu = 'fake-mtu'
-        timeout = 120
-        linux_net._set_mtu_request(dev, mtu, timeout=timeout)
-        args = ['--', 'set', 'interface', dev,
-                'mtu_request=%s' % mtu]
-        mock_vsctl.assert_called_with(args, timeout=timeout)
-
-    @mock.patch.object(linux_net, '_delete_net_dev')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    def test_delete_ovs_vif_port_delete_netdev(
-            self, mock_vsctl, mock_delete_net_dev):
-        bridge = 'fake-bridge'
-        dev = 'fake-dev'
-        timeout = 120
-        linux_net.delete_ovs_vif_port(bridge, dev, timeout=timeout)
-        args = ['--', '--if-exists', 'del-port', bridge, dev]
-        mock_vsctl.assert_called_with(args, timeout=timeout)
-        mock_delete_net_dev.assert_called()
-
-    @mock.patch.object(linux_net, '_delete_net_dev')
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    def test_delete_ovs_vif_port(self, mock_vsctl, mock_delete_net_dev):
-        bridge = 'fake-bridge'
-        dev = 'fake-dev'
-        timeout = 120
-        linux_net.delete_ovs_vif_port(
-            bridge, dev, timeout=timeout, delete_netdev=False)
-        args = ['--', '--if-exists', 'del-port', bridge, dev]
-        mock_vsctl.assert_called_with(args, timeout=timeout)
-        mock_delete_net_dev.assert_not_called()
-
-    @mock.patch.object(linux_net, '_ovs_vsctl')
-    def test_ovs_supports_mtu_requests(self, mock_vsctl):
-        args = ['--columns=mtu_request', 'list', 'interface']
-        timeout = 120
-        msg = 'ovs-vsctl: Interface does not contain' + \
-              ' a column whose name matches "mtu_request"'
-
-        mock_vsctl.return_value = (None, msg)
-        result = linux_net._ovs_supports_mtu_requests(timeout=timeout)
-        mock_vsctl.assert_called_with(args, timeout=timeout)
-        self.assertFalse(result)
-
-        mock_vsctl.return_value = (None, None)
-        result = linux_net._ovs_supports_mtu_requests(timeout=timeout)
-        mock_vsctl.assert_called_with(args, timeout=timeout)
-        self.assertTrue(result)
+        mock_set.assert_called_once_with("vnet1", master="br0")
 
     @mock.patch('six.moves.builtins.open')
     @mock.patch.object(os.path, 'isfile')

@@ -2,78 +2,35 @@
 VIF Types
 =========
 
-In os-vif, a VIF type refers to a particular approach for configuring the
+In *os-vif*, a VIF type refers to a particular approach for configuring the
 backend of a guest virtual network interface. There is a small, finite set of
 ways that a VIF backend can be configured for any given hypervisor and a
 limited amount of metadata is associated with each approach.
 
+
+.. py:module:: os_vif.objects.vif
+
 VIF objects
 ===========
 
-Each distinct type of VIF configuration is represented by a versioned object in
-os-vif, subclassed from `os_vif.objects.VIFBase`. The `VIFBase` class defines
-some fields that are common to all types of VIF, and provides an association to
-a versioned object describing the network the VIF is plugged into.
+Each distinct type of VIF configuration is represented by a versioned object,
+subclassing :class:`VIFBase`.
 
-.. _vif-generic:
+.. autoclass:: VIFBase
 
-VIFGeneric
-----------
+.. autoclass:: VIFGeneric
 
-This class provides a totally generic type of configuration, where the guest is
-simply associated with an arbitrary TAP device (or equivalent).  The way the
-TAP device is connected to the host network stack is explicitly left undefined
-and entirely up to the plugin to decide.
+.. autoclass:: VIFBridge
 
-.. _vif-bridge:
+.. autoclass:: VIFOpenVSwitch
 
-VIFBridge
----------
+.. autoclass:: VIFDirect
 
-This class provides a configuration where the guest is connected directly to an
-explicit host bridge device. This provides ethernet layer bridging, typically
-to the LAN.
+.. autoclass:: VIFVHostUser
 
-.. _vif-openvswitch:
+.. autoclass:: VIFDirect
 
-VIFOpenVSwitch
---------------
-
-This class provides a configuration where the guest is connected to an Open
-vSwitch port.
-
-.. _vif-direct:
-
-VIFDirect
----------
-
-This class provides a configuration where the guest is connected to a physical
-network device. The connection to the device may operate in one of a number of
-different modes, :term:`VEPA` (either :term:`802.1Qbg` or :term:`802.1Qbh`),
-passthrough (exclusive assignment of the host NIC) or bridge (ethernet layer
-bridging of traffic). The passthrough mode would be used when there is a
-network device which needs to have a MAC address or VLAN configuration. For
-passthrough of network devices without MAC/VLAN configuration, the
-`VIFHostDevice` should be used instead.
-
-.. _vif-vhostuser:
-
-VIFVHostUser
-------------
-
-This class provides another totally generic type of configuration, where the
-guest is exposing a UNIX socket for its control plane, allowing an external
-userspace service to provide the backend data plane via a mapped memory region.
-The process must implement the :term:`virtio-net` vhost protocol on this socket
-in whatever means is most suitable.
-
-.. _vif-hostdevice:
-
-VIFHostDevice
--------------
-
-This class provides a way to pass a physical device to the guest.  Either an
-entire physical device, or an SR-IOV PCI device virtual function, are permitted.
+.. autoclass:: VIFNestedDPDK
 
 
 VIF port profile objects
@@ -83,51 +40,38 @@ Each VIF instance can optionally be associated with a port profile object. This
 provides a set of metadata attributes that serve to identify the guest virtual
 interface to the host. Different types of host connectivity will require
 different port profile object metadata. Each port profile type is associated
-with a versioned object, subclassing `VIFPortProfileBase`.
+with a versioned object, subclassing :class:`VIFPortProfileBase`.
 
-VIFPortProfileOpenVSwitch
--------------------------
+.. autoclass:: VIFPortProfileBase
 
-This profile provides the metadata required to associate a VIF with an Open
-vSwitch host port.
+.. autoclass:: VIFPortProfileOpenVSwitch
 
-VIFPortProfile8021Qbg
----------------------
+.. autoclass:: VIFPortProfileFPOpenVSwitch
 
-This profile provides the metadata required to associate a VIF with a VEPA host
-device supporting the :term:`802.1Qbg` spec.
+.. autoclass:: VIFPortProfileOVSRepresentor
 
-VIFPortProfile8021Qbh
----------------------
+.. autoclass:: VIFPortProfileFPBridge
 
-This profile provides the metadata required to associate a VIF with a VEPA host
-device supporting the :term:`802.1Qbh` spec.
+.. autoclass:: VIFPortProfileFPTap
 
-VIFPortProfileFPOpenVSwitch
----------------------------
+.. autoclass:: VIFPortProfile8021Qbg
 
-This profile provides the metadata required to associate a fast path :term:`vhost-user`
-VIF with an :term:`Open vSwitch` port.
+.. autoclass:: VIFPortProfile8021Qbh
 
-VIFPortProfileOVSRepresentor
-----------------------------
+.. autoclass:: VIFPortProfileK8sDPDK
 
-This profile provides the metadata required to associate a VIF with a
-:term:`VF` representor and :term:`Open vSwitch` port. If `representor_name` is
-specified, it indicates a desire to rename the representor to the given name
-on plugging.
 
-VIFPortProfileFPBridge
-----------------------
+Datapath Offload type object
+============================
 
-This profile provides the metadata required to associate a fast path vhost-user
-VIF with a :term:`Linux bridge` port.
+Port profiles can be associated with a ``datapath_offload`` object. This
+provides a set of metadata attributes that serve to identify the datapath
+offload parameters of a VIF. Each different type of datapath offload is
+associated with a versioned object, subclassing :class:`DatapathOffloadBase`.
 
-VIFPortProfileFPTap
--------------------
+.. autoclass:: DatapathOffloadBase
 
-This profile provides the metadata required to associate a fast path vhost-user
-VIF with a Calico port.
+.. autoclass:: DatapathOffloadRepresentor
 
 
 VIF network objects
@@ -137,4 +81,4 @@ Each VIF instance is associated with a set of objects which describe the
 logical network that the guest will be plugged into. This information is again
 represented by a set of versioned objects
 
-TODO :-(
+.. todo:: Populate this!

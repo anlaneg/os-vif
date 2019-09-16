@@ -16,7 +16,7 @@ from pyroute2.netlink import exceptions as ipexc
 from pyroute2.netlink.rtnl import ifinfmsg
 
 from os_vif import exception
-from os_vif.internal.command.ip import impl_pyroute2
+from os_vif.internal.ip.linux import impl_pyroute2
 from os_vif.tests.unit import base
 
 
@@ -30,6 +30,7 @@ class TestIpCommand(base.TestCase):
     UP = 'up'
     TYPE_VETH = 'veth'
     TYPE_VLAN = 'vlan'
+    TYPE_BRIDGE = 'bridge'
     LINK = 'device2'
     VLAN_ID = 14
 
@@ -91,6 +92,25 @@ class TestIpCommand(base.TestCase):
                     'vlan_id': self.VLAN_ID,
                     'link': 1}
             self.ip_link.assert_called_once_with('add', **args)
+
+    def test_add_bridge(self):
+        self.ip.add(self.DEVICE, self.TYPE_BRIDGE)
+        args = {'ifname': self.DEVICE,
+                'kind': self.TYPE_BRIDGE,
+                'IFLA_BR_FORWARD_DELAY': 0,
+                'IFLA_BR_STP_STATE': 0,
+                'IFLA_BR_MCAST_SNOOPING': 0}
+        self.ip_link.assert_called_once_with('add', **args)
+
+    def test_add_bridge_with_ageing(self):
+        self.ip.add(self.DEVICE, self.TYPE_BRIDGE, ageing=0)
+        args = {'ifname': self.DEVICE,
+                'kind': self.TYPE_BRIDGE,
+                'IFLA_BR_AGEING_TIME': 0,
+                'IFLA_BR_FORWARD_DELAY': 0,
+                'IFLA_BR_STP_STATE': 0,
+                'IFLA_BR_MCAST_SNOOPING': 0}
+        self.ip_link.assert_called_once_with('add', **args)
 
     def test_add_vlan_no_interface_found(self):
         with mock.patch.object(iproute.IPRoute, 'link_lookup',
